@@ -1,0 +1,173 @@
+import sys
+import random
+from random import randint
+import time
+import statistics
+TIMEOUT = 1
+
+
+class Proposer(process):
+    def setup(acceptors:set, r, d, tp, w):
+        self.n = None              # proposal number
+        self.majority = acceptors  # majority of acceptors; all in other papers
+        self.w = w
+        self.tp = tp
+
+    #message delay function definition
+    def msgdelay(msg, to):
+        time.sleep(self.d)
+        rand = random.random()
+        if  rand > self.r:
+            send(msg, to=to)        
+
+    def to_consent():
+        n = (0, self) if n == None else (n[0]+1, self)  # pick a prop num
+        msgdelay(('prepare', n), to= majority)
+        
+        #added condition for preemeption
+        if await(len(setof(a, received(('respond', _n, _), from_ =a)))
+                 > len(acceptors)/2 or some(received(('preempted', _n, maxprop)))):
+            #checking if received preemption from other process
+            if some(received(('preempted', _n, maxprop))):
+                output('Preempted by: ', n)
+                n = (maxprop[0] + 1, self)
+            else:
+                v = anyof(setof(v, received(('respond', _n, (n2, v))),
+                                n2==max(setof(n2, received(('respond', _n, (n2, _))))))
+                          or {randint(1,100)})  # any value, pick in 1..100
+                responded = setof(a, received(('respond', _n, _), from_ =a))
+                msgdelay(('accept', n, v), to= responded)
+                debug('### chose', n, v)
+
+        elif timeout(self.tp):
+            output('failed proposal number', n)
+
+    def run():
+        while not received(('done',)):
+            time.sleep(self.w)
+            to_consent()
+
+    def anyof(s):
+        return next(iter(s)) if s else None
+
+
+class Acceptor(process):
+    def setup(learners:set, r, d): pass
+
+    # message delay function definition
+    def msgdelay(msg, to):
+        time.sleep(self.d)
+        rand = random.random()
+        if  rand > self.r:
+            send(msg, to=to)    
+
+    def receive(msg= ('prepare', n), from_= p):
+        if each(sent(('respond', n2, _)), has= n > n2):
+            maxprop = anyof(setof((n, v), sent(('accepted', n, v)),
+                               n==max(setof(n, sent(('accepted', n, _))))))
+            msgdelay(('respond', n, maxprop), to =p)
+        else:
+            maxprop = anyof(setof((n, v), sent(('respond', n, v)),
+                               n==max(setof(n, sent(('respond', n, _))))))
+            #sending preemtion with message delay
+            if maxprop != None:
+                msgdelay(('preempted', n, anyof(maxprop)), to =p)            
+
+    def receive(msg= ('accept', n, v)):
+        if not some(sent(('respond', n2, _)), has= n2 > n):
+            msgdelay(('accepted', n, v), to= learners)
+
+    def run():
+        await(received(('done',)))
+  
+    def anyof(s):
+        return next(iter(s)) if s else None
+
+class Learner(process):
+    def setup(acceptors:set, isSafe, r, d, tl):
+        self.tl = tl
+    
+    def learn():
+        if await(some(received(('accepted', n, v)),
+                      has= len(setof(a, received(('accepted', _n, _v), from_=a)))
+                           > len(acceptors)/2)):
+            output('learned', n, v)
+            send(('safety', v), to= isSafe)
+
+        elif timeout(self.tl):
+            output('failed learning anything')
+
+    def run():
+        learn()
+        output('terminating')
+        send(('learned',), to=nodeof(self))
+
+class IsSafe(process):
+    def setup(nlearners):
+        self.nlearners = nlearners
+        self.llist = []
+
+    def run():
+        await(received(('done',)))
+
+    def receive(msg= ('safety', value_learned)):
+        llist.append(value_learned)
+
+    def receive(msg= ('result')):
+        if len(set(llist)) > 1:
+            output('Safety violated')
+        else:
+           output('Safety Preserved, single learnt value ', set(llist))
+
+
+def main():
+    nacceptors = int(sys.argv[1]) if len(sys.argv) > 1 else 3
+    nproposers = int(sys.argv[2]) if len(sys.argv) > 2 else 5
+    nlearners = int(sys.argv[3]) if len(sys.argv) > 3 else 3
+    n = int(sys.argv[4]) if len(sys.argv) > 5 else 1
+    r = float(sys.argv[5]) if len(sys.argv) > 5 else 0
+    d = int(sys.argv[6]) if len(sys.argv) > 6 else 0
+    w = int(sys.argv[7]) if len(sys.argv) > 7 else 0
+    tp = int(sys.argv[8]) if len(sys.argv) > 8 else 1
+    tl = int(sys.argv[9]) if len(sys.argv) > 9 else 10
+    time_list = []
+
+    #loop for running n rounds
+    for i in range(n):
+        print('Round', i+1)
+        startTime = time.time()
+        isSafe = new(IsSafe, num= 1)
+        acceptors = new(Acceptor, num= nacceptors)
+        proposers = new(Proposer, (acceptors,r,d, tp, w, ), num= nproposers)
+        learners = new(Learner, (acceptors, isSafe, r, d, tl, ), num= nlearners)
+        for p in acceptors: setup(p, (learners, r, d, ))
+        for s in isSafe: setup(s, (nlearners,))
+        start(acceptors | proposers | learners | isSafe)
+        await(each(l in learners, has=received(('learned',), from_=l)))
+        
+        output('done')
+        send(('result'), to= isSafe)
+        send(('done',), to= (acceptors | proposers | isSafe))
+        
+        endTime = time.time()
+        temp= endTime - startTime
+        time_list.append(temp)
+        output('Time elapsed for round', i+1, ' is ', temp)
+
+    #Calculating statistics of the time result for n rounds
+    output('################# Stats for n rounds #################')
+    output('Mean time is:',statistics.mean(time_list))
+    output('Median time is:', statistics.median(time_list))
+    output('Standard Deviation is: ', statistics.stdev(time_list))
+
+
+
+
+#
+# This is an executable specification of the algorithm described in
+# Lamport, L. (2001).  Paxos Made Simple.  ACM SIGACT News 
+# (Distributed Computing Column), 32(4):51-58, December.
+
+# This code includes setup and termination for running repeated rounds until
+# the learners all terminate after learning the consent value or timeout.
+
